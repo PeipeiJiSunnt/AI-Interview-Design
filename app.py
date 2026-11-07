@@ -1,111 +1,101 @@
-import csv
-import hmac
-import io
 import json
+import hmac
 import os
-
 import streamlit as st
-from openai import APIError, AuthenticationError, RateLimitError
+from engine import Interview, OpenAIBackend, TITLE, INTRO, DEFAULT_MODEL
 
-from engine import QUESTIONS, add_question, answer, new_session, now, process_pending
-
-st.set_page_config(page_title="Student AI Interview", page_icon="💬", layout="centered")
-st.markdown("""<style>.block-container{max-width:850px;padding-top:2.5rem}
-[data-testid="stChatMessage"]{border-radius:14px}
-</style>""", unsafe_allow_html=True)
+st.set_page_config(page_title=TITLE, page_icon="💬", layout="centered")
 
 
 def setting(name, default=""):
     try:
-        return str(st.secrets.get(name, os.environ.get(name, default)))
+        return st.secrets.get(name, os.getenv(name, default))
     except FileNotFoundError:
-        return os.environ.get(name, default)
+        return os.getenv(name, default)
 
 
-def downloads(session):
-    st.caption("Download your record before closing or refreshing this page. Records are held in this browser session; there is no central research database in this version.")
-    payload = json.dumps(session, ensure_ascii=False, indent=2)
-    rows = []
-    for item in session["messages"]:
-        rows.append({"session_id": session["session_id"], "condition": session["condition"],
-                     "demo": session["demo"], **item})
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=["session_id", "condition", "demo", "role", "content", "topic", "kind", "time"])
-    writer.writeheader()
-    writer.writerows(rows)
-    name = session["session_id"][:8]
-    left, right = st.columns(2)
-    left.download_button("Download full record (JSON)", payload, f"interview_{name}.json", "application/json", key="json_download")
-    right.download_button("Download transcript (CSV)", buffer.getvalue().encode("utf-8-sig"), f"transcript_{name}.csv", "text/csv", key="csv_download")
+st.title(TITLE)
+st.write(INTRO)
+st.caption("Please avoid names or other identifying details. Responses are sent to OpenAI to generate interview questions. "
+           "Records stay in this browser session; refreshing may lose them. Download your record and send it to the researcher.")
 
-
-st.caption("GEORGETOWN STUDENT AI INTERVIEW · RESEARCH PROTOTYPE")
-st.title("Your experience with AI")
-st.write("A conversation about AI in academic work, your learning, and your perspective.")
+condition = str(setting("INTERVIEW_CONDITION", "C")).upper()
+model = str(setting("OPENAI_MODEL", DEFAULT_MODEL))
+checker_model = str(setting("CHECKER_MODEL", model))
 api_key = setting("OPENAI_API_KEY")
-access_code = setting("ACCESS_CODE")
+access_code = str(setting("ACCESS_CODE"))
+
+if condition not in {"B", "C"}:
+    st.error("The researcher must configure INTERVIEW_CONDITION as B or C.")
+    st.stop()
 
 if "interview" not in st.session_state:
-    st.info("This interview uses AI to generate questions. In live mode, your responses are sent to OpenAI. The researcher will receive your record only if you download and share it. You may end the interview at any time.")
-    with st.form("setup"):
-        participant = st.text_input("Participant code (use a nickname or code)", max_chars=60)
-        condition = st.radio("Interview version", ["B", "C"], horizontal=True)
-        ai_user = st.radio("Have you used AI tools for academic work?", ["Yes", "No"], horizontal=True)
-        demo = st.checkbox("Demo mode — simulated questions, no API calls", value=not bool(api_key))
-        entered_code = st.text_input("Study access code", type="password") if access_code else ""
-        consent = st.checkbox("I agree to participate and understand how my responses are handled.")
-        start = st.form_submit_button("Start interview", type="primary")
-    if start:
-        if not consent:
-            st.warning("Please confirm participation before starting.")
-        elif not demo and not api_key:
-            st.error("The researcher needs to configure OPENAI_API_KEY in the app's Secrets first.")
-        elif access_code and not hmac.compare_digest(entered_code, access_code):
+    st.session_state.interview = None
+if st.session_state.interview is None:
+    entered_code = st.text_input("Study access code", type="password") if access_code else ""
+    consent = st.checkbox("I agree to participate and to have my responses processed as described above.")
+    if st.button("Start interview", disabled=not consent):
+        if access_code and not hmac.compare_digest(entered_code, access_code):
             st.error("The study access code is incorrect.")
+        elif not api_key:
+            st.error("The researcher must configure the OpenAI API connection before this interview can start.")
         else:
-            session = new_session(condition, demo, ai_user == "Yes", setting("OPENAI_MODEL", "gpt-5-mini"), participant.strip())
-            add_question(session)
-            st.session_state.interview = session
+            st.session_state.interview = Interview(condition=condition, model=model, checker_model=checker_model)
             st.rerun()
-    st.caption("The selected AI-use answer controls which core questions are shown. Background is collected without follow-up questions. Other topics allow up to two follow-ups.")
     st.stop()
 
 session = st.session_state.interview
-if session["demo"]:
-    st.warning("DEMO MODE · Questions and checker decisions are simulated. Do not use these records as model results.")
-completed = session["status"] != "active"
-st.progress(1.0 if completed else session["question_index"] / len(QUESTIONS))
-for message in session["messages"]:
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
+for message in session.messages:
+    with st.chat_message("assistant" if message["role"] == "interviewer" else "user"):
+        st.write(message["text"])
 
-if completed:
-    st.success("Thank you. Your interview has ended.")
-    downloads(session)
-else:
-    if session["pending"]:
-        st.caption("Your answer has been saved. Generating the next question…")
+if session.stage == "decide":
+    failed = False
+    with st.spinner("Preparing the next question…"):
         try:
-            with st.spinner("Preparing the next question"):
-                process_pending(session, api_key)
-            st.rerun()
-        except AuthenticationError:
-            st.error("The configured API key was rejected. Ask the researcher to check the app's Secrets.")
-        except RateLimitError:
-            st.error("The API quota or rate limit was reached. Your answer is saved; retry after checking quota.")
-        except (APIError, ValueError):
-            st.error("The model request failed or returned an incomplete result. Your answer is saved. You can retry the current step.")
-        if st.button("Retry current step"):
+            if not api_key:
+                raise ValueError("Missing API configuration")
+            session.decide(OpenAIBackend(api_key))
+        except Exception:
+            failed = True
+    if failed:
+        st.error("We couldn't prepare the next question. Your answer is saved in this session. Please retry or download your record.")
+        if st.button("Retry next question"):
             st.rerun()
     else:
-        reply = st.chat_input("Type your answer…", max_chars=12000)
-        if reply and reply.strip():
-            answer(session, reply.strip())
-            st.rerun()
-    if st.button("End interview early"):
-        session["status"] = "ended_early"
-        session["ended_at"] = now()
-        session["pending"] = False
         st.rerun()
-    with st.expander("Save current progress"):
-        downloads(session)
+elif session.stage == "done":
+    st.success("Thank you for sharing your perspectives. Please download your record and send it to the researcher.")
+elif session.topic == "usage" and session.stage == "core":
+    with st.form("usage_answer"):
+        answer = st.radio("Your answer", ["Yes", "No"], index=None)
+        if st.form_submit_button("Continue"):
+            if answer:
+                session.answer(answer)
+                st.rerun()
+            else:
+                st.error("Please select Yes or No.")
+else:
+    answer = st.chat_input("Share your answer", max_chars=12000)
+    if answer and answer.strip():
+        session.answer(answer)
+        st.rerun()
+
+st.divider()
+st.download_button("Download full record (JSON)", json.dumps(session.record(), ensure_ascii=False, indent=2),
+                   file_name=f"interview_{session.session_id}.json", mime="application/json")
+st.download_button("Download conversation (CSV)", session.csv_record().encode("utf-8-sig"),
+                   file_name=f"interview_{session.session_id}.csv", mime="text/csv")
+with st.expander("Copy conversation"):
+    st.code("\n\n".join(f'{m["role"]}: {m["text"]}' for m in session.messages), language=None)
+if st.button("Start over"):
+    st.session_state.confirm_reset = True
+if st.session_state.get("confirm_reset"):
+    st.warning("Download your record first. Starting over clears this interview from the session.")
+    left, right = st.columns(2)
+    if left.button("Confirm start over"):
+        st.session_state.clear()
+        st.rerun()
+    if right.button("Keep interview"):
+        st.session_state.confirm_reset = False
+        st.rerun()

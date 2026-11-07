@@ -1,46 +1,80 @@
-# Student AI interview
+# Your Perspectives on AI in Education
 
-A Streamlit prototype for B and C semi-structured interviews. The interface and questions are in English.
+Streamlit implementation of the Georgetown Dialogue Systems course interview.
+Rebuilt from the confirmed protocol on 2026-11-07; the earlier Library ZIP was not available locally.
+The existing Sites page remains a separate static mockup.
 
-## Deploy to Streamlit Community Cloud
+## Protocol
 
-1. Unzip this project. Create a GitHub repository and upload `app.py`, `engine.py`, `requirements.txt`, `.gitignore`, and this README. Keep the files together at the repository root.
-2. Open https://share.streamlit.io and create an app from that repository. Set the main file to `app.py` and use Python 3.11 or 3.12.
-3. Open Advanced settings and paste the contents of `secrets.example.toml` into Secrets. Replace the API-key placeholder, choose an access code, and keep `OPENAI_MODEL` set to a model your OpenAI project can access. The starting model is `gpt-5-mini`.
-4. Deploy. Open the app, choose B or C, enter the access code, and uncheck Demo mode for real model calls.
-5. Give participants the app URL and access code. Ask them to download the full JSON record after the interview and send it to you. The JSON includes C's original candidate and checker result. CSV contains the displayed transcript only.
-
-The app can be deployed and explored in Demo mode without an API key. Demo questions are fixed placeholders, and all exports label them as simulated. A missing or invalid real API key does not cause a silent switch to demo.
+- Automated conditions B and C only. A remains a researcher-led human interview using the same outline; this app does not simulate a human interviewer.
+- Background: major, degree program, year; no follow-ups.
+- Usage: one Yes/No question, followed by the appropriate fixed tools/frequency or non-use-reasons branch. Only then start dynamic follow-ups.
+- Specific usage and influence are asked only of AI users. Overall attitude is asked of everyone.
+- Zero to two dynamic follow-ups per topic, one at a time. After the first answer, call the generator again. SKIP advances immediately.
+- B's confirmed prompt is preserved in `engine.B_PROMPT`. B and C use the same generator pipeline. The fixed usage branch is included in the core context.
+- C makes a separate stateless API call to check unsupported presupposition and leading wording. KEEP displays the exact original. REWRITE displays the rewrite. SKIP advances. Failed checker calls retain the same candidate and record each attempt.
+- The checker prompt and JSON format are this implementation's operational specification, not human reference labels. Review and freeze them before data collection.
 
 ## Run locally
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
+Use Python 3.12 or 3.13:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+Copy-Item .streamlit/secrets.toml.example .streamlit/secrets.toml
+# Edit the ignored secrets.toml locally; never commit it.
+.venv\Scripts\python -m streamlit run app.py
 ```
 
-For real calls, create `.streamlit/secrets.toml` locally using the example, or set `OPENAI_API_KEY` in the environment. Do not commit real secrets.
+## Deploy to Streamlit Community Cloud
 
-## Interview design
+1. Upload these project files to `PeipeiJiSunnt/AI-Interview-Design`. Include `.streamlit/secrets.toml.example`, never the real `secrets.toml` or interview data.
+2. At https://share.streamlit.io choose Create app and select the repository, actual branch, and entrypoint `app.py`.
+3. In Advanced settings choose Python 3.13 (the local validation version), and paste the example TOML into Secrets. Replace only the placeholder key there.
+4. Set `INTERVIEW_CONDITION = "B"` or `"C"`. Deploy separate apps with separate Secrets for B and C; participants do not select their condition in the UI. Keep generator/checker models fixed throughout a study batch.
+5. Deploy. For later changes use the app settings to update Secrets.
 
-Both conditions ask the same five core topics in the same order. Background has no follow-ups. Each subsequent topic permits zero to two follow-ups, asked one at a time. The full preceding interview, including actual displayed follow-ups and answers, is passed to the model. Follow-up functions are not predefined.
+```toml
+OPENAI_API_KEY = "YOUR_KEY_IN_STREAMLIT_ONLY"
+OPENAI_MODEL = "gpt-5.4-mini-2026-03-17"
+CHECKER_MODEL = "gpt-5.4-mini-2026-03-17"
+INTERVIEW_CONDITION = "C"
+```
 
-The participant reports AI use before starting. Participants selecting No receive background, usage/non-use reasons, and overall attitude. Experience and learning-influence questions are skipped. This routing choice is explicit rather than automatically inferred from a free-text answer.
+Model decision: the official GPT-5 Mini page marked the old model deprecated when checked on 2026-11-07. This version explicitly switches to the documented GPT-5.4 Mini snapshot above. This is a configurable implementation choice, not a claim of account availability or a silent automatic fallback. An unavailable model produces an error. No API key is embedded, exported, or entered through the participant UI.
 
-B displays the generated question unless it is SKIP. C reviews that exact candidate for unsupported presuppositions and leading wording. KEEP preserves the exact wording, REWRITE changes the wording, and SKIP advances to the next topic. A rejected or skipped candidate is logged. A C retry reuses its cached B candidate.
+## Verification: distinguish offline tests from real calls
 
-Human condition A is conducted outside this app. Model checker flags in C are provisional model judgments. Establish human reference labels separately.
+```powershell
+python -m unittest -v test_engine
+python -m unittest -v test_app
+```
 
-## Records and limitations
+These use fake model outputs and establish state-machine/UI behavior only. They do not validate question quality, checker accuracy, or real API compatibility.
 
-Records are kept in per-user Streamlit session state. Refreshing, disconnecting, or restarting the server can lose them. This version has no central database and does not collect downloads automatically. Download JSON during or after the interview and send it to the researcher. Export a partial record before closing if an API request fails.
+After deployment, complete one Yes interview and one No interview in each condition with synthetic answers. Download JSON and check:
 
-JSON includes the condition, demo flag, requested and actual model IDs, prompts, transcript, original candidates, review decisions, usage, and timestamps. It does not include API keys or access codes. The same configured model is used for B and the C checker in separate requests. Changing models requires editing OPENAI_MODEL before a new session. Model availability depends on your API project.
+- `mode` is `live`; `calls` contains completed generator responses with response IDs, returned models and usage.
+- B has no checker calls; C has completed separate checker calls for every displayed follow-up.
+- C's audit contains original candidate, attempts, final decision, rewrite, and displayed question. KEEP matches verbatim.
+- Non-users never receive specific usage/influence questions; fixed branches do not consume the two-follow-up allowance.
+- Download works before and after completion. Confirmed Start over clears the session.
 
-Do not use the prototype participation text as a replacement for any course-approved consent wording. The access code is a shared study gate, not an individual account system. Condition selection is manual and visible, suitable for pilots. Freeze prompts/model and plan assignment before a formal study.
+Only after those actual calls succeed should real API verification be recorded as passed. Raw model output and call metadata are preserved in full JSON, but model audit judgments are not shown in the conversation. Calls use `store=False`; this does not make claims about provider retention policies.
 
-API errors leave the submitted answer saved and allow an explicit retry. There are no automatic retries of paid requests. A connection timeout can occur after a provider has processed a request, so manual retries can incur an additional charge.
+## Records and evaluation
 
-## Validation
+No database or central collection exists. Session state can be lost on refresh/disconnection/restart. Participants must download and send records to the researcher. JSON is authoritative and includes protocol/prompts/models, conversation, audit, timestamps, call usage, and errors by type. CSV contains conversation only and neutralizes spreadsheet formulas. Do not publish downloaded research records to this repo.
 
-See the delivered run report for the executed checks. The prototype has been tested with simulated model responses. A live OpenAI request requires your API key and has not been verified in the build environment.
+An optional `ACCESS_CODE` in Secrets preserves the earlier prototype's shared study gate. It is not exported. This revised participant app has no demo toggle or participant-facing condition selector; offline simulation is in the test suite.
+
+For human annotation, prepare context + question items for two independent raters, with condition, checker output, and source hidden. Include A's human follow-ups. Label each bias dimension separately; report raw agreement and Cohen's kappa before discussing disagreements to produce reference labels. Preserve the independent labels. Randomize item order and do not show before/after pairs together. C's labels are model outputs, never gold labels. Candidate/rewrite comparisons at the same context measure wording changes; actual downstream answer effects need another experiment.
+
+## Official references checked
+
+- https://developers.openai.com/api/docs/models/gpt-5-mini
+- https://developers.openai.com/api/docs/models/gpt-5.4-mini
+- https://developers.openai.com/api/docs/quickstart
+- https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy
+- https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/secrets-management
