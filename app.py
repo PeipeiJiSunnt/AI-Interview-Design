@@ -2,7 +2,7 @@ import json
 import hmac
 import os
 import streamlit as st
-from engine import Interview, OpenAIBackend, TITLE, INTRO, DEFAULT_MODEL
+from engine import Interview, OpenAIBackend, TITLE, INTRO, DEFAULT_MODEL, safe_diagnostic
 
 st.set_page_config(page_title=TITLE, page_icon="💬", layout="centered")
 
@@ -50,17 +50,24 @@ for message in session.messages:
         st.write(message["text"])
 
 if session.stage == "decide":
-    failed = False
-    with st.spinner("Preparing the next question…"):
-        try:
-            if not api_key:
-                raise ValueError("Missing API configuration")
-            session.decide(OpenAIBackend(api_key))
-        except Exception:
-            failed = True
-    if failed:
+    if not st.session_state.get("request_error"):
+        with st.spinner("Preparing the next question…"):
+            try:
+                if not api_key:
+                    st.session_state.request_error = dict(code="MISSING_API_KEY", http_status=None,
+                                                         message="The researcher must configure the API key in Secrets.")
+                else:
+                    session.decide(OpenAIBackend(api_key))
+            except Exception as exc:
+                st.session_state.request_error = safe_diagnostic(exc)
+    if st.session_state.get("request_error"):
+        diagnostic = st.session_state.request_error
         st.error("We couldn't prepare the next question. Your answer is saved in this session. Please retry or download your record.")
+        st.warning(diagnostic["message"])
+        st.caption("Diagnostic code: " + diagnostic["code"] +
+                   (f' · HTTP {diagnostic["http_status"]}' if diagnostic["http_status"] else ""))
         if st.button("Retry next question"):
+            st.session_state.request_error = None
             st.rerun()
     else:
         st.rerun()

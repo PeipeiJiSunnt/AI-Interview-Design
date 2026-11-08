@@ -62,7 +62,10 @@ class AppTests(unittest.TestCase):
             button(app, "Continue").click().run()
             app.chat_input[0].set_value("I prefer textbooks").run()
             self.assertTrue(app.error)
+            self.assertTrue(any("REQUEST_TIMEOUT" in c.value for c in app.caption))
             count = len(app.session_state["interview"].messages)
+            app.run()  # Download/other reruns must not silently issue another request.
+            self.assertEqual(len(backend.checked), 1)
             button(app, "Retry next question").click().run()
             self.assertFalse(app.error)
             self.assertFalse(app.exception)

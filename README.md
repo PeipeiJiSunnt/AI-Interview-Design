@@ -53,6 +53,8 @@ python -m unittest -v test_app
 
 These use fake model outputs and establish state-machine/UI behavior only. They do not validate question quality, checker accuracy, or real API compatibility.
 
+The failure view shows a safe diagnostic code rather than the raw exception, which may contain credentials. `AUTHENTICATION_FAILED` means check Secrets; `QUOTA_EXCEEDED` means check API billing/limits; `RATE_LIMITED` means wait; `MODEL_OR_RESOURCE_UNAVAILABLE` means check the configured model and project access; `MODEL_OUTPUT_INVALID` means an incomplete response or malformed checker result. Failure does not establish which cause applies until the diagnostic is observed. After a failure, only the explicit Retry button initiates another call; downloading or expanding UI does not retry. Use `python -m unittest -v test_diagnostics` to test the error mapping and redaction offline.
+
 After deployment, complete one Yes interview and one No interview in each condition with synthetic answers. Download JSON and check:
 
 - `mode` is `live`; `calls` contains completed generator responses with response IDs, returned models and usage.

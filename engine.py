@@ -60,6 +60,43 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def safe_diagnostic(exc):
+    """Classify failures without exposing provider messages, bodies, or credentials."""
+    from openai import (AuthenticationError, PermissionDeniedError, NotFoundError,
+                        RateLimitError, APITimeoutError, APIConnectionError)
+    status = getattr(exc, "status_code", None)
+    if type(status) is not int or not 100 <= status <= 599:
+        status = None
+    code = getattr(exc, "code", None)
+    kind = getattr(exc, "type", None)
+    quota_codes = {"insufficient_quota", "billing_hard_limit_reached",
+                   "billing_not_active", "organization_usage_limit_exceeded"}
+    if isinstance(exc, AuthenticationError):
+        category, message = "AUTHENTICATION_FAILED", "The researcher needs to check the API key in Streamlit Secrets."
+    elif isinstance(exc, NotFoundError) or code == "model_not_found":
+        category, message = "MODEL_OR_RESOURCE_UNAVAILABLE", "The configured model or resource is unavailable to this API project."
+    elif isinstance(exc, PermissionDeniedError):
+        category, message = "ACCESS_DENIED", "The API project does not have permission for this request."
+    elif isinstance(exc, RateLimitError):
+        if (isinstance(code, str) and code in quota_codes) or (isinstance(kind, str) and kind in quota_codes):
+            category, message = "QUOTA_EXCEEDED", "The researcher needs to check OpenAI API credits and usage limits before retrying."
+        else:
+            category, message = "RATE_LIMITED", "The API rate limit was reached. Please wait before retrying."
+    elif isinstance(exc, (APITimeoutError, TimeoutError)):
+        category, message = "REQUEST_TIMEOUT", "The API request timed out. Please retry when ready."
+    elif isinstance(exc, APIConnectionError):
+        category, message = "CONNECTION_FAILED", "The server could not connect to the OpenAI API."
+    elif status == 400:
+        category, message = "INVALID_API_REQUEST", "The API rejected the request configuration. Ask the researcher to check it."
+    elif status is not None and status >= 500:
+        category, message = "API_SERVICE_ERROR", "The API service returned an error. Please retry later."
+    elif isinstance(exc, ValueError):
+        category, message = "MODEL_OUTPUT_INVALID", "The model returned an incomplete response or an invalid review format. Please retry."
+    else:
+        category, message = "UNEXPECTED_ERROR", "An unexpected error occurred. Please share the downloaded record with the researcher."
+    return dict(code=category, http_status=status, message=message)
+
+
 @dataclass
 class Interview:
     condition: str = "C"
@@ -241,7 +278,7 @@ class OpenAIBackend:
             event["status"] = "completed"
             return response.output_text
         except Exception as exc:
-            event.update(status="error", error_type=type(exc).__name__)
+            event.update(status="error", error_type=type(exc).__name__, diagnostic=safe_diagnostic(exc))
             raise
 
     def generate(self, prompt, session):

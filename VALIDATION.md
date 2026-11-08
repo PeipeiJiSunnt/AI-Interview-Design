@@ -11,3 +11,7 @@
 - Old Library ZIP: not recovered; implementation rebuilt from the user's confirmed protocol.
 
 Passing offline tests does not establish model accuracy, bias reduction, real API compatibility, or a deployed application.
+
+## 2026-11-08 diagnostic update
+
+The user supplied a screenshot of the deployed UI reaching the first dynamic follow-up and displaying a generic error. Deployment has therefore been observed through that screenshot. No successful live response or precise failure cause has yet been verified. This update adds safe diagnostic categories and makes retries explicit, while preserving cached C candidates. API key, billing, model access, and returned format must be distinguished using actual diagnostic evidence.
